@@ -1,0 +1,220 @@
+diff --git a/Makefile b/Makefile
+index df87a25..93ef496 100644
+--- a/Makefile
++++ b/Makefile
+@@ -157,6 +157,9 @@ UPROGS=\
+ 	$U/_grind\
+ 	$U/_wc\
+ 	$U/_zombie\
++	$U/_sleep\
++	$U/_pingpong\
++	$U/_find\
+ 
+ 
+ ifeq ($(LAB),syscall)
+diff --git a/commands.gdb b/commands.gdb
+new file mode 100644
+index 0000000..11bc3db
+--- /dev/null
++++ b/commands.gdb
+@@ -0,0 +1,6 @@
++dashboard -enabled off
++b exec
++c
++p cpus[$tp]->proc->name
++finish
++p cpus[$tp]->proc->name
+\ No newline at end of file
+diff --git a/user/find.c b/user/find.c
+new file mode 100644
+index 0000000..0122ee9
+--- /dev/null
++++ b/user/find.c
+@@ -0,0 +1,79 @@
++#include "kernel/types.h"
++#include "kernel/stat.h"
++#include "user/user.h"
++#include "kernel/fs.h"
++
++char* getname(char *path)
++{
++    char *p;
++    // Find first character after last slash.
++    for (p = path + strlen(path); p >= path && *p != '/'; p--);
++    p++;
++    return p;
++}
++
++void find(char *path, char *filename)
++{
++    int fd;
++    struct stat st;
++
++    if ((fd = open(path, 0)) < 0) {
++        fprintf(2, "find: cannot open %s\n", path);
++        return;
++    }
++
++    if (fstat(fd, &st) < 0) {
++        fprintf(2, "find: cannot stat %s\n", path);
++        close(fd);
++        return;
++    }
++
++    switch (st.type) {
++        case T_FILE:
++            // Check if the file name matches
++            if (strcmp(getname(path), filename) == 0) {
++                printf("%s\n", path);
++            }
++            break;
++
++        case T_DIR: {
++            if (strcmp(getname(path), filename) == 0) {
++                printf("%s\n", path);
++            }
++
++            char buf[512], *p;
++            struct dirent de;
++            if(strlen(path) + 1 + DIRSIZ + 1 > sizeof buf){
++                printf("find: path too long\n");
++                break;
++            }
++            strcpy(buf, path);
++            p = buf + strlen(buf);
++            *p++ = '/';
++            while (read(fd, &de, sizeof(de)) == sizeof(de)) {
++                if (de.inum == 0)
++                    continue;
++                if (strcmp(de.name, ".") == 0 || strcmp(de.name, "..") == 0)
++                    continue;
++                memmove(p, de.name, DIRSIZ);
++                p[DIRSIZ] = 0;
++                find(buf, filename);
++            }
++            break;
++        }
++
++        default:
++            break;
++    }
++    close(fd);
++}
++
++int main(int argc, char *argv[])
++{
++    if (argc != 3) {
++        fprintf(2, "Usage: find <path> <filename>\n");
++        exit(1);
++    }
++    find(argv[1], argv[2]);
++    exit(0);
++}
+\ No newline at end of file
+diff --git a/user/pingpong.c b/user/pingpong.c
+new file mode 100644
+index 0000000..6ffb18b
+--- /dev/null
++++ b/user/pingpong.c
+@@ -0,0 +1,77 @@
++#include "kernel/types.h"
++#include "user/user.h"
++
++int
++main(int argc, char *argv[])
++{
++    if (argc != 1) {
++        fprintf(2, "Usage: pingpong\n");
++        exit(1);
++    }
++
++    int p2c[2]; // Pipe1: 父 -> 子
++    int c2p[2]; // Pipe2: 子 -> 父
++
++    // 创建两个管道
++    if (pipe(p2c) < 0 || pipe(c2p) < 0) {
++        fprintf(2, "Error: pipe creation failed\n");
++        exit(1);
++    }
++
++    int cur_pid, from_pid;
++    char buf[5];
++
++    int pid = fork();
++    if (pid < 0) {
++        fprintf(2, "Error: fork failed\n");
++        exit(1);
++    }
++
++    if (pid == 0) {
++        // 子进程
++        close(p2c[1]); // 关闭 Pipe1 的写端
++        close(c2p[0]); // 关闭 Pipe2 的读端
++
++        if (read(p2c[0], &from_pid, sizeof(int)) < 0 || read(p2c[0], buf, 4) < 0) {
++            fprintf(2, "Error: read failed\n");
++            exit(1);
++        }
++        buf[4] = '\0';
++        close(p2c[0]); // 读后关闭 Pipe1 读端
++
++        printf("%d: received %s from pid %d\n", getpid(), buf, from_pid);
++
++        cur_pid = getpid();
++        if (write(c2p[1], &cur_pid, sizeof(int)) < 0 || write(c2p[1], "pong", 4) < 0) {
++            fprintf(2, "Error: write failed\n");
++            exit(1);
++        }
++        close(c2p[1]); // 写后关闭 Pipe1 写端
++
++        exit(0);
++    } else {
++        // 父进程
++        close(p2c[0]); // 关闭 Pipe1 读端
++        close(c2p[1]); // 关闭 Pipe2 写端
++
++        cur_pid = getpid();
++        if (write(p2c[1], &cur_pid, sizeof(int)) < 0 || write(p2c[1], "ping", 4) < 0) {
++            fprintf(2, "Error: write failed\n");
++            exit(1);
++        }
++        close(p2c[1]); // 写后关闭 Pipe1 写端
++
++        if (read(c2p[0], &from_pid, sizeof(int)) < 0 || read(c2p[0], buf, 4) < 0) {
++            fprintf(2, "Error: read failed\n");
++            exit(1);
++        }
++        buf[4] = '\0';
++        close(c2p[0]); // 读后关闭 Pipe2 读端
++
++        printf("%d: received %s from pid %d\n", getpid(), buf, from_pid);
++
++        wait(0);
++        exit(0);
++    }
++    exit(0);
++}
+\ No newline at end of file
+diff --git a/user/sleep.c b/user/sleep.c
+new file mode 100644
+index 0000000..ce741ad
+--- /dev/null
++++ b/user/sleep.c
+@@ -0,0 +1,16 @@
++#include "kernel/types.h"
++#include "user/user.h"
++
++int
++main(int argc, char *argv[])
++{
++  if(argc != 2){
++    printf("Sleep needs one argument!\n");
++    exit(-1);
++  }
++
++  int ticks = atoi(argv[1]);
++  sleep(ticks);
++  printf("Sleep %d\n", ticks);
++  exit(0);
++}
+\ No newline at end of file
