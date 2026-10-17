@@ -113,3 +113,11 @@ uint64 sys_seccomp_ctl(void) {
   }
   return seccomp_ctl(op, arg);
 }
+
+uint64 sys_seccomp_getlog(void) {
+  uint64 buf, len;
+  if (argaddr(0, &buf) < 0 || argaddr(1, &len) < 0) {
+    return -1;
+  }
+  return seccomp_getlog((uint64 *)buf, (int *)len);
+}

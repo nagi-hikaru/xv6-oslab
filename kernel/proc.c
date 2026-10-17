@@ -117,7 +117,8 @@ found:
   p->context.ra = (uint64)forkret;
   p->context.sp = p->kstack + PGSIZE;
 
-  p->seccomp_mask = ~0ULL;  // Initialize seccomp mask to allow all system calls
+  p->seccomp_mask = ~0ULL;   // Initialize seccomp mask to allow all system calls
+  p->audit_count = 0;        // Initialize audit count to 0
 
   return p;
 }
@@ -653,4 +654,30 @@ int seccomp_ctl(int op, uint64 arg) {
     return 0;
   }
   return -1; 
+}
+
+// buf: 存放审计日志条目的缓冲区（至少 32 * sizeof(uint64) 字节）
+// len: 传入缓冲区容量，返回实际写入的条目数
+int seccomp_getlog(uint64 *buf, int *len) {
+  if (buf == 0|| len == 0) {
+    return -1; // 参数无效
+  }
+
+  int capacity;
+  struct proc *p = myproc();
+
+  if (copyin(p->pagetable, (char *)&capacity, (uint64)len, sizeof(capacity)) < 0 || capacity <= 0) {
+    return -1;
+  }
+
+  capacity = capacity > p->audit_count ? p->audit_count : capacity;
+  if (copyout(p->pagetable, (uint64)buf, (char *)p->audit_log, sizeof(uint64) * capacity) < 0) {
+    return -1;
+  }
+
+  if (copyout(p->pagetable, (uint64)len, (char *)&capacity, sizeof(capacity)) < 0) {
+    return -1;
+  }
+
+  return 0;
 }

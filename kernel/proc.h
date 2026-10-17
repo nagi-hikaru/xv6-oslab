@@ -104,5 +104,8 @@ struct proc {
   struct inode *cwd;           // Current directory
   char name[16];               // Process name (debugging)
 
-  uint64 seccomp_mask;          // seccomp filter mask
+  uint64 seccomp_mask;         // seccomp filter mask
+
+  uint64 audit_log[32];        // 被拦截的系统调用号
+  int audit_count;             // 已记录的条数
 };

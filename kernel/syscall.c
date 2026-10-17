@@ -91,6 +91,7 @@ extern uint64 sys_uptime(void);
 extern uint64 sys_rename(void);
 extern uint64 sys_yield(void);
 extern uint64 sys_seccomp_ctl(void);
+extern uint64 sys_seccomp_getlog(void);
 
 static uint64 (*syscalls[])(void) = {
     [SYS_fork] sys_fork,   [SYS_exit] sys_exit,     [SYS_wait] sys_wait,     [SYS_pipe] sys_pipe,
@@ -99,6 +100,7 @@ static uint64 (*syscalls[])(void) = {
     [SYS_sleep] sys_sleep, [SYS_uptime] sys_uptime, [SYS_open] sys_open,     [SYS_write] sys_write,
     [SYS_mknod] sys_mknod, [SYS_unlink] sys_unlink, [SYS_link] sys_link,     [SYS_mkdir] sys_mkdir,
     [SYS_close] sys_close, [SYS_rename] sys_rename, [SYS_yield] sys_yield,   [SYS_seccomp_ctl] sys_seccomp_ctl,
+    [SYS_seccomp_getlog] sys_seccomp_getlog,
 };
 
 void syscall(void) {
@@ -108,7 +110,11 @@ void syscall(void) {
   num = p->trapframe->a7;
   if (num > 0 && num < NELEM(syscalls) && syscalls[num]) {
     // 检查是否允许调用该系统调用
-    if (num != SYS_seccomp_ctl && ((p->seccomp_mask & (1ULL << num)) == 0)) {
+    if (num != SYS_seccomp_ctl && num != SYS_seccomp_getlog && ((p->seccomp_mask & (1ULL << num)) == 0)) {
+      if (p->audit_count < 32) {
+        p->audit_log[p->audit_count] = num;  // 记录被拦截的系统调用号
+        p->audit_count++;
+      }
       p->trapframe->a0 = -1;
     } else {
       p->trapframe->a0 = syscalls[num]();
