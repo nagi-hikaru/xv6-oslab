@@ -678,7 +678,7 @@ int seccomp_ctl(int op, uint64 arg) {
     p->max_children = (int)arg;
     return 0;
   }
-  return -1; 
+  return -1;
 }
 
 // buf: 存放审计日志条目的缓冲区（至少 32 * sizeof(uint64) 字节）
