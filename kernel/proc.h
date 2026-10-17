@@ -108,4 +108,7 @@ struct proc {
 
   uint64 audit_log[32];        // 被拦截的系统调用号
   int audit_count;             // 已记录的条数
+
+  int child_count;             // 尚未回收的直接子进程数
+  int max_children;            // 最大子进程数
 };

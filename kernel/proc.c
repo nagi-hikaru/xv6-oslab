@@ -119,6 +119,8 @@ found:
 
   p->seccomp_mask = ~0ULL;   // Initialize seccomp mask to allow all system calls
   p->audit_count = 0;        // Initialize audit count to 0
+  p->child_count = 0;        // Initialize child count to 0
+  p->max_children = NPROC;      // Set maximum number of children to NPROC
 
   return p;
 }
@@ -233,17 +235,29 @@ int fork(void) {
   struct proc *np;
   struct proc *p = myproc();
 
+  if (p != initproc && p->child_count >= p->max_children) {
+    return -1; // Exceeded maximum number of children
+  }
+
   // Allocate process.
   if ((np = allocproc()) == 0) {
     return -1;
   }
 
+  acquire(&p->lock);
+  if (p != initproc)
+    p->child_count++;
+
   // Copy user memory from parent to child.
   if (uvmcopy(p->pagetable, np->pagetable, p->sz) < 0) {
     freeproc(np);
+    if (p != initproc)
+      p->child_count--; // Decrement the child count if uvmcopy fails
     release(&np->lock);
+    release(&p->lock);
     return -1;
   }
+  release(&p->lock);
   np->sz = p->sz;
 
   np->parent = p;
@@ -262,6 +276,7 @@ int fork(void) {
   safestrcpy(np->name, p->name, sizeof(p->name));
 
   np->seccomp_mask = p->seccomp_mask; // 继承父进程的 seccomp_mask
+  np->max_children = p->max_children; // 继承父进程的 max_children
 
   pid = np->pid;
 
@@ -294,6 +309,7 @@ void reparent(struct proc *p) {
       release(&pp->lock);
     }
   }
+  // init 进程的子进程不加以限制
 }
 
 static char *states[] = {
@@ -406,6 +422,9 @@ int wait(uint64 addr, int flags) {
             return -1;
           }
           freeproc(np);
+          if (p != initproc) {
+            p->child_count--; // Decrement the child count when a child is reaped
+          }
           release(&np->lock);
           release(&p->lock);
           return pid;
@@ -651,6 +670,12 @@ int seccomp_ctl(int op, uint64 arg) {
 
   if (op == 0) {
     p->seccomp_mask = arg;
+    return 0;
+  } else if (op == 1) {
+    if (arg > NPROC) {
+      return -1; // 超过系统允许的最大子进程数
+    }
+    p->max_children = (int)arg;
     return 0;
   }
   return -1; 
