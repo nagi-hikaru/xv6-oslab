@@ -291,6 +291,9 @@ void reparent(struct proc *p) {
   }
 }
 
+static char *states[] = {
+    [UNUSED] "unused", [SLEEPING] "sleep ", [RUNNABLE] "runble", [RUNNING] "run   ", [ZOMBIE] "zombie"};
+
 // Exit the current process.  Does not return.
 // An exited process remains in the zombie state
 // until its parent calls wait().
@@ -337,6 +340,18 @@ void exit(int status) {
   acquire(&original_parent->lock);
 
   acquire(&p->lock);
+
+ // exit_info
+  exit_info("proc %d exit, parent pid %d, name %s, state %s\n", p->pid, original_parent->pid, original_parent->name, states[original_parent->state]);
+  int i = 0;
+  for (struct proc *pp = proc; pp < &proc[NPROC]; pp++) {
+    if (pp->parent != p) {
+      continue;
+    }
+    acquire(&pp->lock);
+    exit_info("proc %d exit, child %d, pid %d, name %s, state %s\n", p->pid, i++, pp->pid, pp->name, states[pp->state]);
+    release(&pp->lock);
+  }
 
   // Give any children to init.
   reparent(p);
@@ -603,8 +618,6 @@ int either_copyin(void *dst, int user_src, uint64 src, uint64 len) {
 // Runs when user types ^P on console.
 // No lock to avoid wedging a stuck machine further.
 void procdump(void) {
-  static char *states[] = {
-      [UNUSED] "unused", [SLEEPING] "sleep ", [RUNNABLE] "runble", [RUNNING] "run   ", [ZOMBIE] "zombie"};
   struct proc *p;
   char *state;
 
