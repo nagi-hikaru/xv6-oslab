@@ -117,6 +117,8 @@ found:
   p->context.ra = (uint64)forkret;
   p->context.sp = p->kstack + PGSIZE;
 
+  p->seccomp_mask = ~0ULL;  // Initialize seccomp mask to allow all system calls
+
   return p;
 }
 
@@ -257,6 +259,8 @@ int fork(void) {
   np->cwd = idup(p->cwd);
 
   safestrcpy(np->name, p->name, sizeof(p->name));
+
+  np->seccomp_mask = p->seccomp_mask; // 继承父进程的 seccomp_mask
 
   pid = np->pid;
 
@@ -636,4 +640,17 @@ void procdump(void) {
     printf("%d %s %s", p->pid, state, p->name);
     printf("\n");
   }
+}
+
+// op: 操作码
+//   0 — 设置系统调用白名单位掩码（arg 为位掩码）
+//   1 — 设置最大子进程数（arg 为最大数量）
+int seccomp_ctl(int op, uint64 arg) {
+  struct proc *p = myproc();
+
+  if (op == 0) {
+    p->seccomp_mask = arg;
+    return 0;
+  }
+  return -1; 
 }

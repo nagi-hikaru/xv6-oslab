@@ -104,3 +104,12 @@ uint64 sys_yield(void) {
   yield();
   return 0;
 }
+
+uint64 sys_seccomp_ctl(void) {
+  int op;
+  uint64 arg;
+  if (argint(0, &op) < 0 || argaddr(1, &arg) < 0) {
+    return -1;
+  }
+  return seccomp_ctl(op, arg);
+}
