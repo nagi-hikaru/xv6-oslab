@@ -7,6 +7,8 @@
 #include "spinlock.h"
 #include "proc.h"
 
+extern struct proc proc[NPROC];
+
 uint64 sys_exit(void) {
   int n;
   if (argint(0, &n) < 0) return -1;
@@ -80,5 +82,25 @@ uint64 sys_rename(void) {
   struct proc *p = myproc();
   memmove(p->name, name, len);
   p->name[len] = '\0';
+  return 0;
+}
+
+uint64 sys_yield(void) {
+  struct proc *p = myproc();
+
+  printf("Save the context of the process to the memory region from address %p to %p\n", (uint64)&p->context, (uint64)(&p->context + 1));
+  printf("Current running process pid is %d and user pc is %p\n", p->pid, p->trapframe->epc);
+
+  for (struct proc *np = proc; np < &proc[NPROC]; np++) {
+    acquire(&np->lock);
+    if (np->state == RUNNABLE && np != p) {
+      printf("Next runnable process pid is %d and user pc is %p\n", np->pid, np->trapframe->epc);
+      release(&np->lock);
+      break;
+    }
+    release(&np->lock);
+  }
+
+  yield();
   return 0;
 }
