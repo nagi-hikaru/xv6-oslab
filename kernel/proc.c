@@ -245,14 +245,12 @@ int fork(void) {
   }
 
   acquire(&p->lock);
-  if (p != initproc)
-    p->child_count++;
+  p->child_count++;
 
   // Copy user memory from parent to child.
   if (uvmcopy(p->pagetable, np->pagetable, p->sz) < 0) {
     freeproc(np);
-    if (p != initproc)
-      p->child_count--; // Decrement the child count if uvmcopy fails
+    p->child_count--; // Decrement the child count if uvmcopy fails
     release(&np->lock);
     release(&p->lock);
     return -1;
@@ -422,9 +420,7 @@ int wait(uint64 addr, int flags) {
             return -1;
           }
           freeproc(np);
-          if (p != initproc) {
-            p->child_count--; // Decrement the child count when a child is reaped
-          }
+          p->child_count--; // Decrement the child count when a child is reaped
           release(&np->lock);
           release(&p->lock);
           return pid;
@@ -691,15 +687,18 @@ int seccomp_getlog(uint64 *buf, int *len) {
   int capacity;
   struct proc *p = myproc();
 
+  // 读取 capacity 的值，如果小于等于 0，则返回错误
   if (copyin(p->pagetable, (char *)&capacity, (uint64)len, sizeof(capacity)) < 0 || capacity <= 0) {
     return -1;
   }
 
+  // 复制条目到用户缓冲区，确保不会超过实际记录的条目数
   capacity = capacity > p->audit_count ? p->audit_count : capacity;
   if (copyout(p->pagetable, (uint64)buf, (char *)p->audit_log, sizeof(uint64) * capacity) < 0) {
     return -1;
   }
 
+  // 将实际写入的条目数返回给用户
   if (copyout(p->pagetable, (uint64)len, (char *)&capacity, sizeof(capacity)) < 0) {
     return -1;
   }
