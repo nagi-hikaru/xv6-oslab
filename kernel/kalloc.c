@@ -24,15 +24,15 @@ struct kmem {
 };
 
 struct kmem kmems[NCPU];
-static char locknames[NCPU][7];
+static char locknames[NCPU][8];
 
 void
 kinit()
 {
   // 逐个初始化 kmem 锁
   for(int i = 0; i < NCPU; i++) {
-    memmove(locknames[i], "kmem_0", 7);
-    locknames[i][5] = '0' + i;
+    int n = snprintf(locknames[i], sizeof(locknames[i]) - 1, "kmem_%d", i);
+    locknames[i][n] = '\0';
     initlock(&kmems[i].lock, locknames[i]);
   }
   freerange(end, (void*)PHYSTOP);
