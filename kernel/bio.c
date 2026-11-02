@@ -2,8 +2,8 @@
 //
 // Each hash bucket contains cached disk blocks and has its own lock.
 // A separate lock serializes cache misses and buffer migration. Buffers
-// with no references are recycled by their last-release timestamps.
-// Bucket locks protect lists, reference counts, and timestamps. Each
+// with no references are recycled using a Clock second-chance policy.
+// Bucket locks protect lists, reference counts, and access bits. Each
 // buffer has a sleep lock that protects its contents across disk I/O.
 //
 // Interface:
@@ -29,33 +29,22 @@ struct bucket {
 
 struct {
   struct buf buf[NBUF];
-  uint timestamps[NBUF];
+  uchar accessed[NBUF]; // Clock 访问位，由 buffer 所属桶的锁保护
+  uint hand;            // 下一个要检查的 buffer，由 addlock 保护
   struct spinlock addlock;
   struct bucket buckets[NBUCKETS];
 } bcache;
 
 static char locknames[NBUCKETS][16];
 
-// 获取当前时间戳
-static uint
-now(void)
-{
-  uint timestamp;
-
-  acquire(&tickslock);
-  timestamp = ticks;
-  release(&tickslock);
-  return timestamp;
-}
-
 void
 binit(void)
 {
   struct buf *b;
-  uint timestamp = now();
 
   // 初始化替换锁
   initlock(&bcache.addlock, "bcache.miss");
+  bcache.hand = 0;
   // 初始化哈希桶锁
   for(int i = 0; i < NBUCKETS; i++){
     int n = snprintf(locknames[i], sizeof(locknames[i]) - 1,
@@ -72,7 +61,7 @@ binit(void)
     b->blockno = 0;
     b->valid = 0;
     b->refcnt = 0;
-    bcache.timestamps[b - bcache.buf] = timestamp;
+    bcache.accessed[b - bcache.buf] = 0;
     b->next = bcache.buckets[0].head;
     bcache.buckets[0].head = b;
   }
@@ -98,14 +87,15 @@ bget(uint dev, uint blockno)
   uint n = blockno % NBUCKETS;
   struct buf *b, *victim;
   struct buf **link;
-  uint oldest;  // 保存候选块的时间戳快照，用于比较和重新检查
-  int source;   // 保存候选块原来所在的桶编号
+  uint index, source;
+  int scanned, cleared;
 
   // Cache hits
   acquire(&bcache.buckets[n].lock);
   b = blookup(dev, blockno);
   if(b){
     b->refcnt++;
+    bcache.accessed[b - bcache.buf] = 1;
     release(&bcache.buckets[n].lock);
     acquiresleep(&b->lock);
     return b;
@@ -119,6 +109,7 @@ bget(uint dev, uint blockno)
   b = blookup(dev, blockno);
   if(b){
     b->refcnt++;
+    bcache.accessed[b - bcache.buf] = 1;
     release(&bcache.buckets[n].lock);
     release(&bcache.addlock);
     acquiresleep(&b->lock);
@@ -126,45 +117,39 @@ bget(uint dev, uint blockno)
   }
   release(&bcache.buckets[n].lock);
 
-  for(;;){
-    victim = 0;
-    oldest = 0;
-    source = -1;
-
-    for(int i = 0; i < NBUCKETS; i++){
-      acquire(&bcache.buckets[i].lock);
-      for(b = bcache.buckets[i].head; b; b = b->next){
-        uint timestamp = bcache.timestamps[b - bcache.buf];
-        if(b->refcnt == 0 && (victim == 0 || timestamp < oldest)){
+  victim = 0;
+  while(victim == 0){
+    cleared = 0;
+    for(scanned = 0; scanned < NBUF; scanned++){
+      index = bcache.hand;
+      bcache.hand = (bcache.hand + 1) % NBUF;
+      b = &bcache.buf[index];
+      source = b->blockno % NBUCKETS;
+      acquire(&bcache.buckets[source].lock);
+      if(b->refcnt == 0){
+        if(bcache.accessed[index]){
+          // 最近使用过，清除访问位并给一次第二机会
+          bcache.accessed[index] = 0;
+          cleared = 1;
+        } else {
+          // 同一桶锁内检查、预留并摘链
+          b->refcnt = 1;
+          for(link = &bcache.buckets[source].head;
+              *link != b; link = &(*link)->next)
+            ;
+          *link = b->next;
           victim = b;
-          oldest = timestamp;
-          source = i;
         }
       }
-      release(&bcache.buckets[i].lock);
+      release(&bcache.buckets[source].lock);
+      if(victim)
+        break;
     }
-
-    if(victim == 0){
+    // 扫描一圈没有可替换块，也没有清位的空闲块，说明当时均被引用
+    if(victim == 0 && !cleared){
       release(&bcache.addlock);
       panic("bget: no buffers");
     }
-
-    acquire(&bcache.buckets[source].lock);
-    // 检查缓存块没有被修改
-    if(victim->refcnt != 0 ||
-       bcache.timestamps[victim - bcache.buf] != oldest){
-      release(&bcache.buckets[source].lock);
-      continue;
-    }
-
-    // 预留引用，并从原桶删除
-    victim->refcnt = 1;
-    for(link = &bcache.buckets[source].head;
-        *link != victim; link = &(*link)->next)
-      ;
-    *link = victim->next;
-    release(&bcache.buckets[source].lock);
-    break;
   }
 
   // 替换缓存块
@@ -173,6 +158,7 @@ bget(uint dev, uint blockno)
   victim->valid = 0;
 
   acquire(&bcache.buckets[n].lock);
+  bcache.accessed[victim - bcache.buf] = 1;
   victim->next = bcache.buckets[n].head;
   bcache.buckets[n].head = victim;
   release(&bcache.buckets[n].lock);
@@ -210,18 +196,15 @@ bwrite(struct buf *b)
 void
 brelse(struct buf *b)
 {
-  uint timestamp, n;
+  uint n;
 
   if(!holdingsleep(&b->lock))
     panic("brelse");
 
   releasesleep(&b->lock);
-  timestamp = now();
   n = b->blockno % NBUCKETS;
   acquire(&bcache.buckets[n].lock);
   b->refcnt--;
-  if(b->refcnt == 0)
-    bcache.timestamps[b - bcache.buf] = timestamp;
   release(&bcache.buckets[n].lock);
 }
 
@@ -232,18 +215,16 @@ bpin(struct buf *b)
 
   acquire(&bcache.buckets[n].lock);
   b->refcnt++;
+  bcache.accessed[b - bcache.buf] = 1;
   release(&bcache.buckets[n].lock);
 }
 
 void
 bunpin(struct buf *b)
 {
-  uint timestamp = now();
   uint n = b->blockno % NBUCKETS;
 
   acquire(&bcache.buckets[n].lock);
   b->refcnt--;
-  if(b->refcnt == 0)
-    bcache.timestamps[b - bcache.buf] = timestamp;
   release(&bcache.buckets[n].lock);
 }
