@@ -15,15 +15,15 @@ enum {
 // 当前框架每个 worker 进程只有一个活动 session。此状态属于当前进程，
 // 不覆盖模型 memory 或 KV 的 state 槽位；fork 后父子必须通过管道交付数据。
 static struct {
-  struct ai_session *owner;
-  int pid;
-  int request_fd;
-  int data_fd;
-  int phase;
-  int request;
-  int next_request;
-  char block[AI_KV_FILE_BYTES];
-} prefetch;
+  struct ai_session *owner;      // 当前预取状态所属的会话，空指针表示未启用
+  int pid;                       // 预取辅助子进程的 PID
+  int request_fd;                // 父进程发送预取请求的管道写端
+  int data_fd;                   // 父进程接收预取结果的管道读端
+  int phase;                     // 预取阶段：空闲、等待结果、数据就绪或失败
+  int request;                   // 当前预取的请求编号，-1 表示无请求
+  int next_request;              // 下一次允许发起的请求编号，保证顺序预取
+  char block[AI_KV_FILE_BYTES];  // 保存一条完整 KV 记录的缓冲区
+} prefetch;                      // 本文件内使用的静态预取状态变量
 
 static int
 read_exact(int fd, void *buffer, int length)
