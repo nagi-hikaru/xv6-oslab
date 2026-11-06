@@ -43,7 +43,7 @@ void find(char *path, char *filename)
 
             char buf[512], *p;
             struct dirent de;
-            if(strlen(path) + 1 + DIRSIZ + 1 > sizeof buf){
+            if (strlen(path) + 1 + DIRSIZ + 1 > sizeof(buf)) {
                 printf("find: path too long\n");
                 break;
             }

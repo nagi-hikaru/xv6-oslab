@@ -47,8 +47,6 @@ main(int argc, char *argv[])
             exit(1);
         }
         close(c2p[1]); // 写后关闭 Pipe1 写端
-
-        exit(0);
     } else {
         // 父进程
         close(p2c[0]); // 关闭 Pipe1 读端
@@ -71,7 +69,6 @@ main(int argc, char *argv[])
         printf("%d: received %s from pid %d\n", getpid(), buf, from_pid);
 
         wait(0);
-        exit(0);
     }
     exit(0);
 }
