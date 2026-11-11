@@ -6,6 +6,8 @@
 #include "defs.h"
 #include "fs.h"
 
+#define PT_LEVELS 3
+
 /*
  * the kernel's page table.
  */
@@ -14,6 +16,53 @@ pagetable_t kernel_pagetable;
 extern char etext[];  // kernel.ld sets this to end of kernel code.
 
 extern char trampoline[];  // trampoline.S
+
+/*
+ * 递归辅助函数
+ */
+static void vmprint_helper(pagetable_t pgtbl, int level, uint64 va_prefix) {
+
+  for (int i = 0; i < 512; i++) {
+    pte_t pte = pgtbl[i];
+
+    // 跳过无效项
+    if ((pte & PTE_V) == 0) {
+      continue;
+    }
+
+    uint64 pa = PTE2PA(pte);
+    uint64 va = va_prefix | ((uint64)i << PXSHIFT(level));
+
+    char flags[5] = {
+      (pte & PTE_R) ? 'r' : '-',
+      (pte & PTE_W) ? 'w' : '-',
+      (pte & PTE_X) ? 'x' : '-',
+      (pte & PTE_U) ? 'u' : '-',
+      '\0'
+    };
+
+    // 根层：||；下一层：||   ||；末层：||   ||   ||。
+    for (int j = PT_LEVELS - 1; j > level; j--)
+      printf("||   ");
+    printf("||");
+
+    if ((pte & (PTE_R | PTE_W | PTE_X)) == 0) {
+      // 非叶子项
+      printf("idx: %d: pa: %p, flags: %s\n", i, pa, flags);
+      vmprint_helper((pagetable_t)pa, level - 1, va);
+    } else {
+      printf("idx: %d: va: %p -> pa: %p, flags: %s\n", i, va, pa, flags);
+    }
+  }
+}
+
+/*
+ * 打印页表
+ */
+void vmprint(pagetable_t pgtbl) {
+  printf("page table %p\n", (uint64)pgtbl);
+  vmprint_helper(pgtbl, PT_LEVELS - 1, 0);
+}
 
 /*
  * create a direct-map page table for the kernel.
@@ -49,6 +98,7 @@ void kvminit() {
 // and enable paging.
 void kvminithart() {
   w_satp(MAKE_SATP(kernel_pagetable));
+  // 刷新页表缓存
   sfence_vma();
 }
 
