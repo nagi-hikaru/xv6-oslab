@@ -95,6 +95,9 @@ int exec(char *path, char **argv) {
   p->sz = sz;
   p->trapframe->epc = elf.entry;  // initial program counter = main
   p->trapframe->sp = sp;          // initial stack pointer
+
+  sync_pagetable(p->pagetable, p->k_pagetable);
+
   proc_freepagetable(oldpagetable, oldsz);
 
   // 打印 init 进程的页表

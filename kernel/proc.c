@@ -136,10 +136,16 @@ found:
 static void freeproc(struct proc *p) {
   if (p->trapframe) kfree((void *)p->trapframe);
   p->trapframe = 0;
+
+  // 释放进程内核页表
+  if (p->k_pagetable) {
+    unsync_pagetable(p->k_pagetable);
+    proc_kvmfree(p->k_pagetable);
+  }
+  p->k_pagetable = 0;
+
   if (p->pagetable) proc_freepagetable(p->pagetable, p->sz);
   p->pagetable = 0;
-  if (p->k_pagetable) proc_kvmfree(p->k_pagetable);
-  p->k_pagetable = 0;
   p->sz = 0;
   p->pid = 0;
   p->parent = 0;
@@ -217,6 +223,9 @@ void userinit(void) {
   uvminit(p->pagetable, initcode, sizeof(initcode));
   p->sz = PGSIZE;
 
+  // 将用户虚拟地址同步到进程内核页表
+  sync_pagetable(p->pagetable, p->k_pagetable);
+
   // prepare for the very first "return" from kernel to user.
   p->trapframe->epc = 0;      // user program counter
   p->trapframe->sp = PGSIZE;  // user stack pointer
@@ -244,6 +253,10 @@ int growproc(int n) {
     sz = uvmdealloc(p->pagetable, sz, sz + n);
   }
   p->sz = sz;
+
+  // 将用户虚拟地址同步到进程内核页表，并刷新缓存
+  sync_pagetable(p->pagetable, p->k_pagetable);
+
   return 0;
 }
 
@@ -266,6 +279,9 @@ int fork(void) {
     return -1;
   }
   np->sz = p->sz;
+
+  // 将用户虚拟地址同步到进程内核页表
+  sync_pagetable(np->pagetable, np->k_pagetable);
 
   np->parent = p;
 
