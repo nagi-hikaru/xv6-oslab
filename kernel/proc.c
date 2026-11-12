@@ -37,6 +37,8 @@ void procinit(void) {
     uint64 va = KSTACK((int)(p - proc));
     kvmmap(va, (uint64)pa, PGSIZE, PTE_R | PTE_W);
     p->kstack = va;
+    // 保存内核栈物理地址，用于 allocproc 时在进程内核页表做地址映射
+    p->kstack_pa = (uint64)pa;
   }
   kvminithart();
 }
@@ -111,6 +113,14 @@ found:
     return 0;
   }
 
+  // 创建独立内核页表
+  p->k_pagetable = proc_kpagetable(p);
+  if (p->k_pagetable == 0) {
+    freeproc(p);
+    release(&p->lock);
+    return 0;
+  }
+
   // Set up new context to start executing at forkret,
   // which returns to user space.
   memset(&p->context, 0, sizeof(p->context));
@@ -128,6 +138,8 @@ static void freeproc(struct proc *p) {
   p->trapframe = 0;
   if (p->pagetable) proc_freepagetable(p->pagetable, p->sz);
   p->pagetable = 0;
+  if (p->k_pagetable) proc_kvmfree(p->k_pagetable);
+  p->k_pagetable = 0;
   p->sz = 0;
   p->pid = 0;
   p->parent = 0;
@@ -160,6 +172,18 @@ pagetable_t proc_pagetable(struct proc *p) {
   if (mappages(pagetable, TRAPFRAME, PGSIZE, (uint64)(p->trapframe), PTE_R | PTE_W) < 0) {
     uvmunmap(pagetable, TRAMPOLINE, 1, 0);
     uvmfree(pagetable, 0);
+    return 0;
+  }
+
+  return pagetable;
+}
+
+pagetable_t proc_kpagetable(struct proc *p) {
+  pagetable_t pagetable = proc_kvmcreate();
+  if (pagetable == 0) return 0;
+
+  if (mappages(pagetable, p->kstack, PGSIZE, p->kstack_pa, PTE_R | PTE_W) < 0) {
+    proc_kvmfree(pagetable);
     return 0;
   }
 
@@ -430,10 +454,17 @@ void scheduler(void) {
         // before jumping back to us.
         p->state = RUNNING;
         c->proc = p;
+
+        // 安装进程内核页表并刷新缓存
+        proc_kvminithart(p->k_pagetable);
+
         swtch(&c->context, &p->context);
 
         // Process is done running for now.
         // It should have changed its p->state before coming back.
+
+        // 重新安装全局内核页表，并刷新缓存
+        kvminithart();
         c->proc = 0;
 
         found = 1;

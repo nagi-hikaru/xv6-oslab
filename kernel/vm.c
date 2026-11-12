@@ -65,6 +65,85 @@ void vmprint(pagetable_t pgtbl) {
 }
 
 /*
+ * 创建进程内核页表
+ */
+pagetable_t proc_kvmcreate(void) {
+  pagetable_t pagetable = (pagetable_t)kalloc();
+  if (pagetable == 0) return 0;
+
+  memset(pagetable, 0, PGSIZE);
+
+  // uart registers
+  if (proc_kvmmap(pagetable, UART0, UART0, PGSIZE, PTE_R | PTE_W) < 0) 
+    goto bad;
+
+  // virtio mmio disk interface
+  if (proc_kvmmap(pagetable, VIRTIO0, VIRTIO0, PGSIZE, PTE_R | PTE_W) < 0)
+    goto bad;
+
+  // PLIC
+  if (proc_kvmmap(pagetable, PLIC, PLIC, 0x400000, PTE_R | PTE_W) < 0)
+    goto bad;
+
+  // map kernel text executable and read-only.
+  if (proc_kvmmap(pagetable, KERNBASE, KERNBASE, (uint64)etext - KERNBASE, PTE_R | PTE_X) < 0)
+    goto bad;
+
+  // map kernel data and the physical RAM we'll make use of.
+  if (proc_kvmmap(pagetable, (uint64)etext, (uint64)etext, PHYSTOP - (uint64)etext, PTE_R | PTE_W) < 0)
+    goto bad;
+
+  // map the trampoline for trap entry/exit to
+  // the highest virtual address in the kernel.
+  if (proc_kvmmap(pagetable, TRAMPOLINE, (uint64)trampoline, PGSIZE, PTE_R | PTE_X) < 0)
+    goto bad;
+
+  return pagetable;
+
+bad:
+  proc_kvmfree(pagetable);
+  return 0;
+}
+
+/*
+ * 进程内核页表映射辅助函数
+ */
+int proc_kvmmap(pagetable_t pagetable, uint64 va, uint64 pa, uint64 sz, int perm) {
+  return mappages(pagetable, va, sz, pa, perm);
+}
+
+/*
+ * 切换进程内核页表
+ */
+void proc_kvminithart(pagetable_t pagetable) {
+    w_satp(MAKE_SATP(pagetable));
+    // 刷新页表缓存
+    sfence_vma();
+}
+
+/*
+ * 释放进程内核页表
+ */
+void proc_kvmfree(pagetable_t pagetable) {
+  for (int i = 0; i < 512; i++) {
+    pte_t pte = pagetable[i];
+
+    if ((pte & PTE_V) == 0) {
+      continue;
+    }
+
+    // 非叶子项目递归释放下一级页表
+    if ((pte & (PTE_R | PTE_W | PTE_X)) == 0) {
+      uint64 pa = PTE2PA(pte);
+      proc_kvmfree((pagetable_t)pa);
+    }
+    // 叶子项只撤销映射，非叶子项清除对子表引用
+    pagetable[i] = 0;
+  }
+  kfree((void *)pagetable);
+}
+
+/*
  * create a direct-map page table for the kernel.
  */
 void kvminit() {
@@ -98,7 +177,6 @@ void kvminit() {
 // and enable paging.
 void kvminithart() {
   w_satp(MAKE_SATP(kernel_pagetable));
-  // 刷新页表缓存
   sfence_vma();
 }
 
